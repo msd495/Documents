@@ -1,0 +1,1246 @@
+/*
+ * =========================================================================================
+ * Copyright (c) 2001-2017 Fidelity National Information Services and/or
+ * its subsidiaries - All Rights Reserved worldwide.
+ *
+ * This document is protected under the trade secret and copyright laws as the property of
+ * Fidelity National Information Services, Inc. and/or its subsidiaries.
+ * Copying, reproduction or distribution should be limited and only to employees with a
+ * "need to know" to do their job. Any disclosure of this document to third parties is
+ * strictly prohibited.
+ * =========================================================================================
+ */
+/*
+ * @author Subodh.Godbole
+ */
+
+(function() {
+	'use strict';
+
+
+	var DEFAULTS = {
+		FAX_FORMAT: new RegExp('^\\(?([0-9]{3})\\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})$')
+	};
+
+	angular.module('bpm-common.services').provider('sdUtilService', function() {
+		this.$get = ['$rootScope', '$parse', '$q', '$http', 'sdEnvConfigService', 'sdLoggerService', '$filter', '$timeout', function($rootScope, $parse, $q, $http, sdEnvConfigService, sdLoggerService, $filter, $timeout) {
+			var service = new UtilService($rootScope, $parse, $q, $http, sdEnvConfigService, sdLoggerService, $filter, $timeout);
+			return service;
+		}];
+	});
+
+	/*
+	 *
+	 */
+	function UtilService($rootScope, $parse, $q, $http, sdEnvConfigService, sdLoggerService, $filter, $timeout) {
+
+		var trace = sdLoggerService.getLogger('bpm-common.services.sdUtilService');
+
+		var HTML_SPECIAL_CHARS_REGEX = /[&<>"'\/]/g;
+		var HTML_SPECIAL_CHARS_ESCAPE = {
+			'&': '&amp;',
+			'<': '&lt;',
+			'>': '&gt;',
+			'"': '&quot;',
+			'\'': '&apos;',
+			'/': '&#x2F;'
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.safeApply = function($scope) {
+			var root = $scope.$root ? $scope.$root : $scope;
+			if (!root.$$phase) {
+				$scope.$apply();
+			}
+		};
+
+		/*
+		 * Copies properties (attributes and functions) which does not start
+		 * with $ Properties starting with $ are considered as private and hence
+		 * skipped
+		 */
+		UtilService.prototype.extend = function(childObject, parentObject, addFuncProxies) {
+			var proxies = addFuncProxies ? addFuncProxies : true;
+
+			for ( var member in parentObject) {
+				if (member.indexOf('$') != 0) {
+					childObject[member] = parentObject[member];
+
+					if (proxies && angular.isFunction(childObject[member])) {
+						childObject['$' + member] = createProxyFunc(parentObject, member);
+					}
+				}
+			}
+		};
+
+		/*
+		 * Creates proxy function for each function which does not start with $
+		 * Proxy function is added by prefixing $ to the existing function The
+		 * proxy function helps is retaining 'this' context while calling
+		 * function on scope from markup (ng-click)
+		 */
+		UtilService.prototype.addFunctionProxies = function(obj) {
+			for ( var member in obj) {
+				if (member.indexOf('$') != 0 && angular.isFunction(obj[member])) {
+					obj['$' + member] = createProxyFunc(obj, member);
+				}
+			}
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.stopEvent = function(event) {
+			if (event.stopPropagation) {
+				event.stopPropagation();
+			} else if (window.event) {
+				window.event.cancelBubble = true;
+			}
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.parseFunction = function(funcAsStr) {
+			var ret = null;
+
+			try {
+				if (funcAsStr.indexOf('(') != -1) {
+					funcAsStr = funcAsStr.substring(funcAsStr.indexOf('(') + 1);
+
+					if (funcAsStr.indexOf(')') != -1) {
+						var params = funcAsStr.substring(0, funcAsStr.indexOf(')'));
+						params = params.split(',');
+						for (var i = 0; i < params.length; i++) {
+							params[i] = params[i].trim();
+						}
+						ret = {};
+						ret.params = params;
+					}
+				}
+			} catch (e) {
+			}
+
+			return ret;
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.isEmpty = function(data) {
+			if (data == undefined || data == null) {
+				return true;
+			}
+
+			var empty = false;
+
+			switch (typeof data) {
+			case 'string':
+				if (data == '') {
+					empty = true;
+				}
+				break;
+			case 'object':
+				if (angular.isArray(data)) {
+					empty = data.length == 0;
+				} else {
+					var properties = 0;
+					for ( var key in data) {
+						properties++;
+						break;
+					}
+					empty = properties == 0;
+				}
+				break;
+			}
+
+			return empty;
+		};
+
+
+		/**
+	 *
+	 */
+	 UtilService.prototype.removeFormErrors = function(form, errorFields) {
+		 angular.forEach(errorFields, function(field) {
+			   delete form.$error[field];
+		 });
+
+			if (this.isObjectEmpty(form.$error)) {
+				form.$valid = true;
+	        }
+	 };
+
+
+		/**
+      *
+      */
+	  UtilService.prototype.isObjectEmpty = function(obj) {
+			  for ( var key in obj) {
+				if (obj.hasOwnProperty(key)) {
+					return false;
+				}
+			}
+			return true;
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.assert = function(condition, msg) {
+			if (!condition) {
+				throw msg;
+			}
+		};
+
+		/*
+		 * For async, use angular resource
+		 */
+		UtilService.prototype.syncAjax = function(endpoint) {
+			var data, failed;
+
+			jQuery.ajax({
+				type: 'GET',
+				url: endpoint,
+				async: false,
+				contentType: 'application/json',
+				success: function(result) {
+					data = result;
+				},
+				error: function(errObj) {
+					failed = true;
+				}
+			});
+
+			if (failed) {
+				throw 'Error in invoking syncAjax()';
+			}
+
+			return data;
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.syncAjaxPost = function (endpoint, value) {
+			var data, failed;
+
+			jQuery.ajax({
+				type: 'POST',
+				url: endpoint,
+				async: false,
+				data: JSON.stringify(value),
+				contentType: 'application/json',
+				success: function (result) {
+					data = result;
+				},
+				error: function (errObj) {
+					failed = true;
+				}
+			});
+
+			if (failed) {
+				throw 'Error in invoking syncAjaxPost()';
+			}
+
+			return data;
+		};
+
+		/**
+		 *
+		 */
+		UtilService.prototype.truncateTitle = function(title) {
+			var MAX_TITLE_LENGTH = 35;
+			return this.truncate(title, MAX_TITLE_LENGTH);
+		};
+
+		/**
+		 *
+		 */
+		UtilService.prototype.truncate = function(string, maxLength) {
+
+			if (string.length > maxLength) {
+				string = string.substring(0, maxLength - 3);
+				string += '...';
+			}
+			return string;
+		};
+
+		/**
+		 *
+		 */
+
+		UtilService.prototype.getRootUrl = function() {
+			var rootUrl;
+
+			//If called from within an iframe plugin context, main.html will not be in the path
+			if (location.href.indexOf('/main.html') === -1) {
+				rootUrl = window.location.href.substring(0, location.href.indexOf('/plugins/'));
+			}
+			//normal path context with main.html in path
+			else {
+				rootUrl = window.location.href.substring(0, location.href.indexOf('/main.html'));
+			}
+			return rootUrl;
+		};
+
+		UtilService.prototype.format = function(str, args) {
+			return str.replace(/{(\d+)}/g, function(match, number) {
+				return typeof args[number] != 'undefined' ? args[number] : match;
+		    });
+		};
+
+	  /**
+	   * invokes the callback the given element is available on scope
+	   * Note that it is only Availability trigger!
+	   */
+		UtilService.prototype.watch = function($scope, watchforElement, callback, unregister) {
+			trace.log('watching scope for: ' , watchforElement);
+	    if ($parse(watchforElement)($scope)) {
+	      callback();
+	    } else {
+	      // If not available Watch for it
+	      $scope.watchForIt = function() {
+					return $parse(watchforElement)($scope) ? 'GotIt' : '';
+	      };
+
+	      trace.log('Registering Watch for Element: ' , watchforElement);
+	      var unregister = $scope.$watch('watchForIt()', function(newVal, oldVal) {
+	        if (newVal !== oldVal) {
+	          if (unregister) {
+	            unregister();
+	          }
+	          callback();
+	        }
+	      });
+	    }
+	  };
+
+		/**
+		 *
+		 */
+		UtilService.prototype.convertToSortedArray = function (obj, field, ascending, type) {
+			var sortedObjects = [];
+
+			for ( var key in obj) {
+				if (obj.hasOwnProperty(key)) {
+					sortedObjects.push(obj[key]);
+				}
+			}
+
+			var ascendingFactor = ascending ? 1 : -1;
+			switch (type) {
+			case 'NUMBER':
+				sortedObjects.sort(function (left, right) {
+					return ((left[field] - right[field]) * ascendingFactor);
+				});
+				break;
+			default:
+				sortedObjects.sort(function (left, right) {
+
+					var leftValue, rightValue;
+
+					if (left[field] && right[field]) {
+
+						leftValue = left[field].toLowerCase();
+						rightValue = right[field].toLowerCase();
+
+						if (leftValue < rightValue) {
+							return -1 * ascendingFactor;
+						}
+						if (leftValue > rightValue) {
+							return 1 * ascendingFactor;
+						}
+					}
+					return 0;
+				});
+			}
+			return sortedObjects;
+		};
+
+		/*
+		 *
+		 */
+		function createProxyFunc(obj, member) {
+			function proxyFunc() {
+				var args = Array.prototype.slice.call(arguments, 0);
+				obj[member].apply(obj, args);
+			}
+
+
+			return proxyFunc;
+		}
+
+		/**
+		 *
+		 */
+
+		UtilService.prototype.ajax = function(restUrl, extension, value) {
+			var deferred = $q.defer();
+
+			var type;
+			var data;
+			if (angular.isObject(value) || angular.isArray(value)) {
+				restUrl += extension;
+				type = 'POST';
+				data = JSON.stringify(value);
+			} else {
+				restUrl += value + '/' + extension;
+				type = 'GET';
+			}
+
+			var httpResponse;
+			if (type == 'GET') {
+				httpResponse = $http.get(restUrl);
+			} else {
+				httpResponse = $http.post(restUrl, data);
+			}
+
+			httpResponse.success(function(data) {
+				deferred.resolve(data);
+			}).error(function(data) {
+				deferred.reject(data);
+			});
+
+			return deferred.promise;
+		};
+
+		/*
+		 * 
+		 */
+		UtilService.prototype.ajaxPost = function (restUrl, extension, value) {
+			var deferred = $q.defer();
+
+			var type = 'POST';
+			var data = value ? JSON.stringify(value) : null;
+
+			restUrl += extension;
+			var httpResponse = $http.post(restUrl, data);
+
+			httpResponse.success(function (res) {
+				deferred.resolve(res);
+			}).error(function (err) {
+				deferred.reject(err);
+			});
+
+			return deferred.promise;
+		};
+
+		/**
+		 * @param fromDate
+		 * @param toDate
+		 * @returns {Boolean}
+		 */
+		UtilService.prototype.validateDateRange = function(fromDate, toDate) {
+			if (!this.isEmpty(fromDate) && !this.isEmpty(toDate)) {
+				if (fromDate > toDate) {
+					return false;
+				}
+			}
+			return true;
+		};
+		/**
+		 *
+		 */
+		UtilService.prototype.validatePassword = function(password, passwordConfirmation) {
+			var passwordValidationMsg = '';
+			if (this.isEmpty(passwordConfirmation) || this.isEmpty(password)) {
+				passwordValidationMsg = 'views.createUser.password.empty';
+			} else if (passwordConfirmation !== password) {
+				passwordValidationMsg = 'views.createUser.password.mismatch';
+			}
+			return passwordValidationMsg;
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.getBaseUrl = function() {
+			if (sdEnvConfigService.getBaseUrl()) {
+				return sdEnvConfigService.getBaseUrl();
+			}
+
+			var baseURL = '';
+			if (location.href.indexOf('plugins') > -1) {
+				baseURL = location.href.substring(0, location.href.indexOf('plugins'));
+			} else if (location.href.indexOf('main.html') > -1) {
+				baseURL = location.href.substring(0, location.href.indexOf('main.html'));
+			}
+
+			return baseURL;
+		};
+
+		/*
+		 * Flattens out the Tree Structure into flat array
+		 */
+		UtilService.prototype.marshalDataForTree = function(data, parentRow) {
+			var treeLevel = parentRow ? parentRow.$$treeInfo.level + 1 : 0;
+			var retData = [];
+
+			for (var i = 0; i < data.length; i++) {
+				retData.push(data[i]);
+
+				data[i].$$treeInfo = {};
+				data[i].$$treeInfo.level = treeLevel;
+				data[i].$$treeInfo.levels = [];
+				for (var j = 0; j < treeLevel; j++) {
+					data[i].$$treeInfo.levels.push(j);
+				}
+
+				data[i].$$treeInfo.parent = null;
+				data[i].$$treeInfo.parents = {};
+
+				if (parentRow) {
+					data[i].$$treeInfo.parents = angular.copy(parentRow.$$treeInfo.parents);
+					data[i].$$treeInfo.parents[parentRow.$$treeInfo.id] = true;
+				}
+
+				if (data[i].children != undefined) {
+					data[i].$leaf = false;
+				} else {
+					data[i].$leaf = (data[i].$leaf == undefined || data[i].$leaf == true) ? true : false;
+				}
+
+				if (!data[i].$leaf) {
+					data[i].$expanded = data[i].$expanded ? true : false;
+
+					data[i].$$treeInfo.id = 'r' + (Math.floor(Math.random() * 10000) + 1);
+					data[i].$$treeInfo.loaded = false;
+
+					// Process children
+					if (data[i].children != undefined && angular.isArray(data[i].children)) {
+						data[i].$$treeInfo.loaded = true;
+						var childrenArray = this.marshalDataForTree(data[i].children, data[i]);
+						for (var j = 0; j < childrenArray.length; j++) {
+							retData.push(childrenArray[j]);
+						}
+					}
+				}
+			}
+
+			return retData;
+		};
+
+		/*
+		 * Returns visible (expanded) tree rows
+		 */
+		UtilService.prototype.rebuildTreeTable = function(treeTableData, filterFunc) {
+			var rebuiltData = [], collapsedParents = {};
+			for (var i = 0; i < treeTableData.length; i++) {
+				var visible = filterFunc(treeTableData[i]);
+				if (!visible) {
+					if (!treeTableData[i].$leaf) {
+						treeTableData[i].$expanded = false;
+						collapsedParents[treeTableData[i].$$treeInfo.id] = true;
+					}
+					continue;
+				}
+
+				if (!treeTableData[i].$expanded) {
+					collapsedParents[treeTableData[i].$$treeInfo.id] = true;
+				}
+
+				if (this.isTreeTableNodeVisible(treeTableData[i], collapsedParents)) {
+					rebuiltData.push(treeTableData[i]);
+				}
+			}
+
+			return rebuiltData;
+		};
+
+		/*
+		 * Checks if tree row is visible or not
+		 */
+		UtilService.prototype.isTreeTableNodeVisible = function(row, collapsedParents) {
+			for (var parent in collapsedParents) {
+				if (row.$$treeInfo.parents[parent]) {
+					return false;
+				}
+			}
+
+			return true;
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.expandTreeTable = function(treeTableData) {
+			for (var i = 0; i < treeTableData.length; i++) {
+				if (treeTableData[i].$expanded != undefined && treeTableData[i].$$treeInfo.loaded) {
+					treeTableData[i].$expanded = true;
+				}
+			}
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.collapseTreeTable = function(treeTableData) {
+			for (var i = 0; i < treeTableData.length; i++) {
+				if (treeTableData[i].$expanded != undefined) {
+					treeTableData[i].$expanded = false;
+				}
+			}
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.insertChildrenIntoTreeTable = function(treeTableData, rowData, children) {
+			var treeRowIndex;
+			for (var i = 0; i < treeTableData.length; i++) {
+				if (treeTableData[i].$$treeInfo.id == rowData.$$treeInfo.id) {
+					treeRowIndex = i;
+					break;
+				}
+			}
+
+			var args = [treeRowIndex + 1, 0].concat(children);
+			treeTableData.splice.apply(treeTableData, args);
+		};
+
+		/**
+		 * Given an array of names generate a unique name with collisions being resolved
+		 * by appending a numeric increment to the name and then recursing until no collisions occur.
+		 *
+		 * @usage: generateUniqueName(['Anne','Bob'], 'Frank');
+		 * @param names - array of names we are testing against.
+		 * @param testName - name we are testing for uniqueness
+		 * @param suffix - OPTIONAL Defaults to zero.
+		 * 				 - MUST BE AN INTEGER --99.99% sure you should leave this blank as
+		 * 				   it is designed to be passed on subsequent recursive calls.
+		 *                 Passing a value in on the user invocation
+		 *                 results in the increment starting at that suffix value.
+		 * @returns a unique name!
+		 */
+		UtilService.prototype.generateUniqueName = function(names,testName,suffix) {
+			var i,
+			  	found = false,
+				temp;
+
+			suffix = !suffix ? 0 : suffix;
+
+			for (i = 0; i < names.length; i++) {
+				temp = names[i];
+				if (suffix === 0) {
+					if (temp === testName) {
+						found = true;
+					}
+				} else if (temp === testName + ' ' + suffix) {
+					found = true;
+				}
+			}
+
+			if (found) {
+				return this.generateUniqueName(names,testName,suffix + 1);
+			} else if (suffix === 0) {
+				return testName;
+			} else {
+				return testName + ' ' + suffix;
+			}
+		};
+
+		/**
+		 * AngularJS internal IE detection code,
+		 * Works on IE11 and below, Will fail on EDGE
+		 * https://msdn.microsoft.com/en-us/library/hh869301(v=vs.85).aspx
+		 * @return {Boolean} [description]
+		 */
+		UtilService.prototype.isIE = function() {
+			var msie = parseInt((/msie (\d+)/.exec(navigator.userAgent.toLowerCase()) || [])[1]);
+
+			if (isNaN(msie)) {
+			  msie = parseInt((/trident\/.*; rv:(\d+)/.exec(navigator.userAgent.toLowerCase()) || [])[1]);
+			}
+
+			return (!isNaN(msie));
+		};
+
+		/**
+		 * Function to detect firefox browser
+		 */
+		UtilService.prototype.isFF = function() {
+			if (navigator.userAgent && (-1 != navigator.userAgent.indexOf('Firefox'))) {
+				return true;
+			}
+
+			return false;
+		};
+	   /**
+	    * Returns true if browser is IE and browser is below version 10
+	    */
+		UtilService.prototype.isIEBelow10 = function() {
+		    var myNav = navigator.userAgent.toLowerCase();
+		    return (myNav.indexOf('msie') != -1) ? parseInt(myNav.split('msie')[1]) < 10 : false;
+		};
+
+		/**
+		 * Zips and downloads a folder and all of its files and sub folders.
+		 */
+		UtilService.prototype.downloadFolder = function(folderId) {
+			var REST_BASE_URL = this.getBaseUrl() + 'services/rest/portal/folders';
+			window.location = REST_BASE_URL +
+							  '/export' +
+							  '/' + folderId;
+		};
+
+		/**
+		 * Helper function to download a document in our document repository.
+		 * Base on the internal implementation of the sdDocumentDownload
+		 * directive in html5-views-common. If you need a UI instance of this
+		 * method (one that gives you a download icon and confirm dialog etc)
+		 * use the directive instead.
+		 */
+		UtilService.prototype.downloadDocument = function(documentId,documentName) {
+
+	  		var REST_BASE_URL = this.getBaseUrl() + 'services/rest/portal/documents';
+			window.location = REST_BASE_URL +
+							  '/downloadDocument' +
+							  '/' + documentId +
+							  '/' + documentName;
+		};
+
+	  /**
+	   *Downloads the content as a file. Tested with UTF-8 (text) content.
+	   *Still to be determined how this works with binary content (images/wav files).
+	   *Update: works with binary but need arraybuffer as response type in the $http
+	   *request and inline from the REST end point. (See GET /artifacts in REST common).
+	   *Note:ref ng-grid
+	   *@param: content - data to save to file
+	   *@param: filename - name of file, if not provided with = {timestamp}.txt
+	   *@param: mimeType - defaults to UTF-8 charset
+	   */
+		UtilService.prototype.downloadAsFile = function(content,filename,mimeType) {
+
+		    var a = document.createElement('a');
+		    var strMimeType = mimeType || 'application/octet-stream;charset=utf-8';
+		    var rawFile;
+
+		    if (!filename) {
+		      filename = new Date().getTime() + '.txt';
+		    }
+
+		    if (this.isIEBelow10()) {
+		      var frame = document.createElement('iframe');
+		      document.body.appendChild(frame);
+		      frame.contentWindow.document.open('text/html', 'replace');
+		      frame.contentWindow.document.write(content);
+		      frame.contentWindow.document.close();
+		      frame.contentWindow.focus();
+		      //must save as .txt as SaveAs will only work with text files in IE9 (requires a registry change otherwise)
+		      frame.contentWindow.document.execCommand('SaveAs', true, filename + '.txt');
+		      document.body.removeChild(frame);
+		      return true;
+		    }
+
+		    // IE10+
+		    if (navigator.msSaveBlob) {
+		      return navigator.msSaveBlob(new Blob(['\ufeff', content], {
+		        type: strMimeType
+		      }), filename);
+		    }
+
+		    //html5 A[download]
+		    if ('download' in a) {
+		      var blob = new Blob([content], {
+		        type: strMimeType
+		      });
+		      rawFile = URL.createObjectURL(blob);
+		      a.setAttribute('download', filename);
+		    } else {
+		      rawFile = 'data:' + strMimeType + ',' + encodeURIComponent(content);
+		      a.setAttribute('target', '_blank');
+		      a.setAttribute('download', filename);
+		    }
+
+
+		    a.href = rawFile;
+		    a.setAttribute('style', 'display:none;');
+		    document.body.appendChild(a);
+		    setTimeout(function() {
+		      if (a.click) {
+		        a.click();
+		        // Safari 5
+		      } else if (document.createEvent) {
+		        var eventObj = document.createEvent('MouseEvents');
+		        eventObj.initEvent('click', true, true);
+		        a.dispatchEvent(eventObj);
+		      }
+		      document.body.removeChild(a);
+
+		    }, 100);
+	   	};
+
+	   	/**
+	   	 * Returns an ISO8601 formatted date (YYYYMMDD). If a date
+	   	 * is not passed as a parameter it will default to the current date.
+	   	 */
+	   	UtilService.prototype.getISO8601Date = function(date) {
+	   		date = (date instanceof Date) ? date : new Date();
+	   		return (date.getFullYear() * 10000) +
+	   			((1 + date.getMonth()) * 100) + date.getDate();
+	   	};
+
+	   	UtilService.prototype.resolveProperty = function(obj, field) {
+			try {
+				if (field == null || obj == null) {
+					return obj;
+				}
+
+				if (field.indexOf('.') > -1) {
+					var parts = field.split('.');
+					var current = obj;
+					for ( var j in parts) {
+						current = current[parts[j]];
+					}
+					return current;
+				}
+				return obj[field];
+			} catch (e) {
+				trace.error('Could not resolve property: ' + field + ' of: ', obj, e);
+				return obj;
+			}
+		};
+		/*
+		 *
+		 */
+		UtilService.prototype.assignProperty = function(obj, field, value) {
+			try {
+				if (field == null || obj == null) {
+					return obj;
+				}
+
+				if (field.indexOf('.') > -1) {
+					var parts = field.split('.');
+					var current = obj;
+					for (var j = 0; j < parts.length - 1; j++) {
+						current = current[parts[j]];
+					}
+					current[parts[parts.length - 1]] = value;
+				} else {
+					obj[field] = value;
+				}
+			} catch (e) {
+				trace.error('Could not assign as resolve property: ' + field + ' of: ', obj, e);
+			}
+		};
+
+		/**
+		 *  Checks for falsy value
+		 *  no/ false/ "false" / "FALSE" /0 / "0"  = false
+		 *  Rest all true
+		 */
+	 	UtilService.prototype.toBoolean = function (value) {
+			   if (value && value.length !== 0) {
+			    var v = angular.lowercase('' + value);
+			    value = !(v == '0' || v == 'false' || v == 'no');
+			  } else {
+			    value = false;
+			  }
+			  return value;
+		};
+
+		/**
+		 *  Checks is a number is fax number
+		 */
+	 	UtilService.prototype.isFaxNumber = function (value,customFormat) {
+
+	 		var fax_format = DEFAULTS.FAX_FORMAT;
+
+	 		if (customFormat) {
+	 			fax_format = customFormat;
+	 		}
+	 		return fax_format.test(value);
+		};
+
+
+		/*
+		 *
+		 */
+	 	UtilService.prototype.extractParamsFromUri = function(str) {
+			var params = {}, regex = /([^&=]+)=([^&]*)/g, match;
+			if (str != '' && str.length > 0) {
+				while (match = regex.exec(str)) {
+					params[decodeURIComponent(match[1])] = decodeURIComponent(match[2]);
+				}
+			}
+			return params;
+		};
+
+	 	/*
+	 	 *
+	 	 */
+	 	UtilService.prototype.escapeHtml = function(html) {
+			try {
+				if (html != undefined && html != null && html != '') {
+					// Simple check to verify whether it's HTML, to avoid unnecessary RegEx processing for performamce
+					if (html.indexOf('<') != -1) {
+						html = String(html).replace(HTML_SPECIAL_CHARS_REGEX, function (sChar) {
+							return HTML_SPECIAL_CHARS_ESCAPE[sChar];
+						});
+					}
+				}
+
+				return html;
+			} catch (e) {
+				trace.error('Error in escaping Html, ignoing it', e);
+				var sampleHtml = html.length > 100 ? (html.substring(0, 100) + '...') : html;
+				trace.debug('Html was: ', sampleHtml);
+
+				return '---';
+			}
+		};
+
+		/**
+		 * RFC4122 compatible implementation. Utilizes performance.now to offset
+		 * the first 13 hex numbers by a hex portion of the timestamp.
+		 * @return {[type]} [description]
+		 */
+		UtilService.prototype.generateUUID = function() {
+
+		    var d = new Date().getTime();
+
+		    if (window.performance && typeof window.performance.now === 'function') {
+		        d += performance.now(); //use high-precision timer if available
+		    }
+
+		    var uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+		        var r = (d + Math.random() * 16) % 16 | 0;
+		        d = Math.floor(d / 16);
+		        return (c == 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+		    });
+
+		    return uuid;
+	  	};
+
+	 	/**
+		 *
+		 */
+		UtilService.prototype.replaceAll = function(str, find, replace) {
+			return str.replace(new RegExp(escapeRegExp(find), 'g'), replace);
+		};
+
+		/**
+		 * Block browser refreshes using the F5 key as that generally causes havoc in the portal.
+		 *
+		 */
+		UtilService.prototype.blockBrowserRefresh = function() {
+			if (document) {
+				document.addEventListener('keydown', function(e) {
+					if (
+						((e.which || e.keyCode) == 116) ||
+						(e.ctrlKey && ((e.which || e.keyCode) == 82))
+					) {
+						e.preventDefault();
+						trace.log('F5 refresh blocked by application.');
+					}
+				},{capture: true});
+
+			}
+		};
+
+		/*
+		 *
+		 */
+		UtilService.prototype.handleMultiSelectForIE = function(obj, showMultiSelectFlag) {
+			var self = this;
+
+			if (self.isIE()) {
+				// IE browser fix to allow selection in multiselect box
+				obj[showMultiSelectFlag] = false;
+				$timeout(function() {
+					obj[showMultiSelectFlag] = true;
+				}, 0);
+			} else {
+				obj[showMultiSelectFlag] = true;
+			}
+		};
+
+	 	/**
+		 *
+		 */
+		function escapeRegExp(str) {
+			return str.replace(/([.*+?^=!:${}()|\[\]\/\\])/g, '\\$1');
+		}
+
+		/**
+		 *
+		 */
+		UtilService.prototype.initSavedFilter = function(filter, colDef) {
+
+			if (undefined !== filter.relativeFrom && undefined !== filter.relativeDuration) {
+
+			      var fromDate = new Date();
+			      switch (filter.relativeFrom) {
+			          case 'YESTERDAY':
+			              fromDate.setDate(fromDate.getDate() - 1);
+			              break;
+			          case 'TODAY':
+			              break;
+			          case 'TOMORROW':
+			              fromDate.setDate(fromDate.getDate() + 1);
+			              break;
+			      }
+
+			      filter.from = fromDate.getTime();
+
+			      // Calculate To Date
+			      var toDate = new Date();
+			      toDate.setDate(fromDate.getDate() + filter.relativeDuration);
+			      filter.to = toDate.getTime();
+
+			      // If relative duration is in negative value we need to swap from and to date
+			      if (filter.relativeDuration < 0) {
+			          var temp = filter.from;
+			          filter.from = filter.to;
+			          filter.to = temp;
+			      }
+
+				  if (undefined === filter.dateType) {
+					  filter.dateType = 'date';
+				  	  var arr = filter.title.split(' ');
+				  	  if (arr[1] !== '-') {
+				  	      filter.dateType = 'dateTime';
+				  	  }
+				  }
+
+			      filter.title = this.formatDate(filter.from, filter.dateType) + ' - ' + this.formatDate(filter.to, filter.dateType);
+			  }
+		};
+
+		/**
+		 *
+		 */
+		UtilService.prototype.formatDate = function(mills, dateType) {
+		    var date = new Date(mills);
+		    var angularDateFilter;
+		    if (dateType == 'date') {
+		        angularDateFilter = $filter('sdDateFilter');
+		    } else {
+		    	angularDateFilter = $filter('sdDateTimeFilter');
+		    }
+
+		    return angularDateFilter(date);
+		};
+
+		/**
+		 * Uses the jstz library to return the client time zone name.
+		 */
+		UtilService.prototype.getClientTimeZone = function() {
+			return (jstz) ? jstz.determine().name() : '';
+		};
+
+		/**
+		 * Set cookies against given document.
+		 * @param cname cookie name
+		 * @param cvalue cookie value
+		 * @param exdays no of the  days cookie will valid
+		 */
+		UtilService.prototype.setCookie = function(document, cname, cvalue, exdays) {
+		    var d = new Date();
+		    d.setTime(d.getTime() + (exdays * 24 * 60 * 60 * 1000));
+		    var expires = 'expires=' + d.toUTCString();
+		    document.cookie = cname + '=' + cvalue + ';' + expires + ';path=/';
+		};
+
+		/**
+		 * return the cookie specified by cookie name for the given document.
+		 */
+		UtilService.prototype.getCookie = function(document, cname) {
+		    var name = cname + '=';
+		    var ca = document.cookie.split(';');
+		    for (var i = 0; i < ca.length; i++) {
+		        var c = ca[i];
+		        while (c.charAt(0) == ' ') {
+		            c = c.substring(1);
+		        }
+		        if (c.indexOf(name) == 0) {
+		            return c.substring(name.length, c.length);
+		        }
+		    }
+		    return '';
+		};
+
+		/**
+		 * tokenize a string on comma, also trim unwanted spaces if any
+		 */
+	 	UtilService.prototype.splitOnComma = function(str) {
+	 		var tokenizedString = [];
+	 		str = str.split(',');
+	 		for (var i in str) {
+	 			tokenizedString.push(str[i].replace(/(^[,\s]+)|([,\s]+$)/g, ''));
+	 		}
+	 		return tokenizedString;
+		};
+
+		/*
+		 * validate input against passed regExp, returns true when pattern found, else false
+		 */
+		UtilService.prototype.validateInputForRegEx = function (input, unacceptedCharPattern) {
+			var unacceptedRegExPattern = new RegExp(unacceptedCharPattern);
+			return unacceptedRegExPattern.test(input);
+		};
+
+
+	 	/**
+	 	 * array assignment creates reference not copy,
+	 	 * call below fn to get a copy of the passed array.
+	 	 */
+	 	UtilService.prototype.cloneArray = function(arr) {
+	 		return arr.slice(0);
+	 	};
+
+	 	/**
+	 	 * compare numeric and string values.
+	 	 */
+		UtilService.prototype.doStringComparison = function (number, str) {
+			if (number + '' === str) {
+				return true;
+			} else {
+				return false;
+			}
+		};
+
+		/**
+		 * Function validates the page range having format of 1,4,5-6 It also
+		 * validates if one number gets repeated in range e.g. 5,3-7 if page
+		 * range not valid return result object with array with error. If range
+		 * is valid then result object range array contains valid page numbers.
+		 * if ValidateAll parameter is true then function will validate all page range group else it return
+		 * on first error.
+		 */
+		UtilService.prototype.validatePageRange = function(rangeStr, maxPages,
+			validateAll) {
+			var result = {
+				errors: [],
+				ranges: []
+			};
+			var rangeArr = rangeStr.split(',');
+			var rangeResults = [];
+			if (rangeArr != null && rangeArr.length > 0) {
+				for (var i = 0; i < rangeArr.length; i++) {
+					var rangeTemp = rangeArr[i];
+					if (new RegExp('^(\\d+)-(\\d+)$').test(rangeTemp)) {
+						var numbers = rangeTemp.split('-');
+						rangeResults[0] = parseInt(numbers[0]);
+						rangeResults[1] = parseInt(numbers[1]);
+						if ((rangeResults[0] < 1 || rangeResults[1] < 1)
+								|| rangeResults[0] > maxPages
+								|| rangeResults[1] > maxPages) {
+							var err = {
+								pageRangeError: rangeTemp
+							};
+							result.errors.push(err);
+							if (validateAll) {
+								continue;
+							} break;
+						}
+						for (var j = rangeResults[0]; j <= rangeResults[1]; j++) {
+							if (result.ranges.indexOf(j - 1) >= 0) {
+								var err = {
+									overlappingRange: rangeTemp
+								};
+								result.errors.push(err);
+								if (validateAll) {
+									continue;
+								} break;
+							}
+							result.ranges.push(j - 1);
+						}
+					} else if (new RegExp('^\\d+$').test(rangeTemp)) {
+						var val = parseInt(rangeTemp);
+						if (val > maxPages) {
+							var err = {
+								pageRangeError: rangeTemp
+							};
+							result.errors.push(err);
+							if (validateAll) {
+								continue;
+							} break;
+						}
+						if (val > 0 && 2 <= maxPages) {
+							if (result.ranges.indexOf(val - 1) >= 0) {
+								var err = {
+									overlappingRange: rangeTemp
+								};
+								result.errors.push(err);
+								if (validateAll) {
+									continue;
+								} break;
+							}
+							result.ranges.push(val - 1);
+						} else {
+							var err = {
+								pageRangeError: rangeTemp
+							};
+							result.errors.push(err);
+							if (validateAll) {
+								continue;
+							} break;
+						}
+					} else {
+						var err = {
+							pageRangeError: rangeTemp
+						};
+						result.errors.push(err);
+						if (validateAll) {
+							continue;
+						} break;
+					}
+				}
+			}
+
+			return result;
+		};
+
+		/**
+		 * Copied from GenericController.js - TODO: May need to refine it!
+		 */
+		UtilService.prototype.fetchServerTimeZone = function(date) {
+			var serverTimeZoneOffset = null;
+
+			var url = this.getBaseUrl() + 'services/rest/portal/localization/serverTimeZone';
+			if (date) {
+				url = url + '/' + date.getDate() + '.' + (date.getMonth() + 1) + '.'
+						+ date.getFullYear() + '-' + date.getHours() + '.'
+						+ date.getMinutes() + '.' + date.getSeconds();
+			}
+
+			jQuery.ajax({
+				type: 'GET',
+				url: url,
+				async: false
+			}).done(function(data) {
+				serverTimeZoneOffset = parseInt(data);
+			}).fail(function(err) {
+				serverTimeZoneOffset = 0; // Safety check, make it zero
+				trace.log('Failed loading server time zone.');
+			});
+
+			trace.log('Server Time Zone Offset : ' + serverTimeZoneOffset);
+			return serverTimeZoneOffset;
+		};
+
+		/**
+		 * remove last comma and white spaces if present at the end
+		 */
+		UtilService.prototype.removeLastComma = function (str) {
+			return str.replace(/,\s*$/, '');
+		};
+
+		/**
+		 * copy to clipboard
+		 */
+		UtilService.prototype.copyTextToClipboard = function (copyText) {
+			var input = document.createElement('input');
+			input.value = copyText;
+			document.body.appendChild(input);
+			input.select();
+			document.execCommand('copy');
+			document.body.removeChild(input);
+		};
+
+	}
+})();
